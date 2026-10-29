@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smart Parking</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--bg:#f4f6fb;--card:#fff;--ink:#14213d;--mut:#667;--pri:#0b57d0;--ok:#168a45;--warn:#d98200;--bad:#c62828;--ln:#e1e5ee}
+*{box-sizing:border-box}body{margin:0;font:15px system-ui,Arial;background:var(--bg);color:var(--ink)}
+header{background:var(--pri);color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:1000}
+header b{font-size:17px}header button{background:#ffffff33;color:#fff;border:0;border-radius:8px;padding:6px 10px}
+main{max-width:640px;margin:auto;padding:12px 12px 80px}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:14px;padding:12px;margin:10px 0}
+input,select{width:100%;padding:11px;border:1px solid var(--ln);border-radius:10px;font:inherit;margin:4px 0;background:#fff;color:var(--ink)}
+button.p{background:var(--pri);color:#fff;border:0;border-radius:10px;padding:12px;width:100%;font:inherit;font-weight:600;margin-top:6px}
+button.s{background:#fff;border:1px solid var(--pri);color:var(--pri);border-radius:10px;padding:9px 12px;font:inherit}
+button.d{background:#fff;border:1px solid var(--bad);color:var(--bad);border-radius:8px;padding:5px 9px}
+.seg{display:flex;gap:6px}.seg button{flex:1;padding:9px;border:1px solid var(--ln);background:#fff;border-radius:10px;font:inherit}.seg .on{background:var(--pri);color:#fff;border-color:var(--pri)}
+#map{height:300px;border-radius:14px;border:1px solid var(--ln);margin:8px 0}
+.lot{display:flex;justify-content:space-between;gap:10px;align-items:center}
+.badge{border-radius:999px;padding:3px 10px;font-size:12px;font-weight:700;color:#fff;white-space:nowrap}
+.g{background:var(--ok)}.y{background:var(--warn)}.r{background:var(--bad)}
+.verdict{padding:10px;border-radius:10px;font-weight:600;margin:8px 0}.v-ok{background:#e4f6ea;color:#0d5c2d}.v-no{background:#fdeaea;color:#8c1d1d}
+.mut{color:var(--mut);font-size:13px}.tabs{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--ln);display:flex;z-index:1000}
+.tabs button{flex:1;padding:12px 4px;border:0;background:none;font:inherit;color:var(--mut)}.tabs .on{color:var(--pri);font-weight:700}
+.sug{background:#fff;border:1px solid var(--ln);border-radius:10px}.sug div{padding:10px;border-bottom:1px solid var(--ln)}
+.qr{text-align:center}.qr img{width:210px;height:210px}
+.toast{position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:#14213d;color:#fff;padding:10px 16px;border-radius:10px;z-index:2000;max-width:90%}
+.hide{display:none!important}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}.tile{background:#fff;border:1px solid var(--ln);border-radius:14px;padding:12px}.tile b{display:block;font-size:22px}
+.bar{height:6px;border-radius:4px;background:#e6e9f1;margin-top:6px;overflow:hidden}.bar i{display:block;height:100%}
+.best{border:2px solid var(--ok)}.tag{display:inline-block;font-size:11px;font-weight:700;border-radius:6px;padding:2px 6px;margin-right:4px}
+.legend{display:flex;gap:12px;font-size:12px;color:var(--mut);margin:2px 2px 6px;flex-wrap:wrap}.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}
+.lot:active{transform:scale(.99)}
+</style></head><body>
+<header><b>🅿 Smart Parking</b><span id="who"></span></header>
+<main id="app"></main><div id="help" class="card" style="max-width:616px;margin:0 auto 80px;text-align:center"></div><nav class="tabs" id="tabs"></nav><div id="toast" class="toast hide"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script>
+(function(){
+var $=function(s,e){return (e||document).querySelector(s)};
+var S={user:null,cfg:{},tab:'find',role:'customer',reg:false,from:null,to:null,lots:[],veh:'car',hold:30,hours:1,picked:null,pin:null,sel:null};
+function api(p,m,b){return fetch('/api/'+p,{method:m||'GET',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||'Error');return j})})}
+function toast(t){var e=$('#toast');e.textContent=t;e.classList.remove('hide');clearTimeout(toast.t);toast.t=setTimeout(function(){e.classList.add('hide')},3200)}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function rs(n){return '₹'+(Math.round(n*100)/100)}
+function hav(a,b,c,d){var R=6371000,r=Math.PI/180,p=(c-a)*r,q=(d-b)*r,x=Math.sin(p/2)*Math.sin(p/2)+Math.cos(a*r)*Math.cos(c*r)*Math.sin(q/2)*Math.sin(q/2);return 2*R*Math.asin(Math.sqrt(x))}
+function eta(l){if(!S.from)return '';var d=hav(S.from.lat,S.from.lng,l.lat,l.lng)*1.3/1000,m=Math.max(1,Math.round(d/25*60));return '🚗 ~'+m+' min · '+d.toFixed(1)+' km from you'}
+function km(m){return m<1000?m+' m':(m/1000).toFixed(1)+' km'}
+function loadScript(src){return new Promise(function(ok,no){var s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=no;document.head.appendChild(s)})}
+
+/* ---------- Map layer: Google Maps if key present, else Leaflet + OpenStreetMap ---------- */
+var M={g:false,map:null,mk:[],circ:null,clickCb:null,
+ init:function(el){
+  if(M.g){M.map=new google.maps.Map(el,{center:{lat:20.59,lng:78.96},zoom:5,minZoom:4,restriction:{latLngBounds:{north:37.6,south:6,west:67,east:98},strictBounds:false},streetViewControl:false,mapTypeControl:false});M.geo=new google.maps.Geocoder();
+   M.map.addListener('click',function(e){M.clickCb&&M.clickCb(e.latLng.lat(),e.latLng.lng())})}
+  else{M.map=L.map(el,{minZoom:4,maxBounds:[[5,66],[38,99]],maxBoundsViscosity:.9}).setView([20.59,78.96],5);M.street=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(M.map);M.satL=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Imagery © Esri'});
+   M.map.on('click',function(e){M.clickCb&&M.clickCb(e.latlng.lat,e.latlng.lng)})}
+  M.mk=[];M.circ=null;M.isSat=false;
+  var sb=document.createElement('button');sb.type='button';sb.textContent='🛰 Satellite';sb.style.cssText='position:absolute;top:10px;right:10px;z-index:1000;border:0;border-radius:8px;padding:8px 10px;background:#fff;box-shadow:0 1px 5px #0005;font-weight:600;color:#14213d';
+  sb.onclick=function(ev){ev.stopPropagation();M.setSat(!M.isSat)};el.appendChild(sb);M.sb=sb},
+ setSat:function(on){M.isSat=on;if(M.sb)M.sb.textContent=on?'🗺 Map':'🛰 Satellite';
+  if(M.g)M.map.setMapTypeId(on?'hybrid':'roadmap');
+  else{if(on){M.map.removeLayer(M.street);M.satL.addTo(M.map)}else{M.map.removeLayer(M.satL);M.street.addTo(M.map)}}},
+ view:function(lat,lng,z){M.g?(M.map.setCenter({lat:lat,lng:lng}),M.map.setZoom(z)):M.map.setView([lat,lng],z)},
+ clear:function(){M.mk.forEach(function(m){M.g?m.setMap(null):M.map.removeLayer(m)});M.mk=[];if(M.circ){M.g?M.circ.setMap(null):M.map.removeLayer(M.circ);M.circ=null}},
+ pin:function(lat,lng,color,label,cb){var m;
+  if(M.g){m=new google.maps.Marker({position:{lat:lat,lng:lng},map:M.map,label:{text:label||'',color:'#fff',fontWeight:'700'},icon:{path:google.maps.SymbolPath.CIRCLE,scale:14,fillColor:color,fillOpacity:1,strokeColor:'#fff',strokeWeight:2}});cb&&m.addListener('click',cb)}
+  else{m=L.marker([lat,lng],{icon:L.divIcon({className:'',html:'<div style="background:'+color+';color:#fff;border:2px solid #fff;border-radius:50%;width:28px;height:28px;text-align:center;line-height:24px;font-weight:700;box-shadow:0 1px 4px #0006">'+esc(label||'')+'</div>',iconSize:[28,28],iconAnchor:[14,14]})}).addTo(M.map);cb&&m.on('click',cb)}
+  M.mk.push(m)},
+ circle:function(lat,lng,r){if(M.g)M.circ=new google.maps.Circle({map:M.map,center:{lat:lat,lng:lng},radius:r,strokeColor:'#0b57d0',fillColor:'#0b57d0',fillOpacity:.08,strokeWeight:2,clickable:false});
+  else M.circ=L.circle([lat,lng],{radius:r,color:'#0b57d0',fillOpacity:.08}).addTo(M.map)},
+ fit:function(circle){if(!M.circ)return;M.g?M.map.fitBounds(M.circ.getBounds()):M.map.fitBounds(M.circ.getBounds())},
+ geocode:function(q){
+  if(M.g)return new Promise(function(ok,no){M.geo.geocode({address:q,region:'in',componentRestrictions:{country:'IN'}},function(r,st){if(st==='OK')ok(r.slice(0,5).map(function(x){return {name:x.formatted_address,lat:x.geometry.location.lat(),lng:x.geometry.location.lng()}}));else if(st==='ZERO_RESULTS')ok([]);else no(new Error('Geocoding: '+st))})});
+  return fetch('https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=in&q='+encodeURIComponent(q)).then(function(r){return r.json()}).then(function(a){return a.map(function(x){return {name:x.display_name,lat:+x.lat,lng:+x.lon}})})}
+};
+function inIndia(la,ln){return la>=6&&la<=37.6&&ln>=67&&ln<=98}
+function gps(){return new Promise(function(ok,no){navigator.geolocation?navigator.geolocation.getCurrentPosition(function(p){ok({lat:p.coords.latitude,lng:p.coords.longitude})},function(){no(new Error('Location permission denied'))},{enableHighAccuracy:true,timeout:10000}):no(new Error('GPS not supported'))})}
+
+/* ---------- Shell ---------- */
+function shell(){
+ $('#who').innerHTML=S.user?'<button id="lo">'+esc(S.user.name)+' · Logout</button>':'';
+ if(S.user)$('#lo').onclick=function(){api('logout','POST').then(function(){S.user=null;S.tab='find';render()})};
+ var t=!S.user?[]:(S.user.role==='customer'?[['find','🔍 Find'],['bk','🎫 My bookings']]:[['dash','📊 Dashboard'],['lots','🅿 My lots'],['bk','📋 Bookings'],['scan','📷 Gate']]);
+ $('#tabs').innerHTML=t.map(function(x){return '<button data-t="'+x[0]+'" class="'+(S.tab===x[0]?'on':'')+'">'+x[1]+'</button>'}).join('');
+ Array.prototype.forEach.call(document.querySelectorAll('#tabs button'),function(b){b.onclick=function(){S.tab=b.dataset.t;render()}})}
+function helpBox(){var n=S.cfg.help_no||'7416779528';$('#help').innerHTML='<b>Need help?</b> <span class="mut">Customer support</span><div style="display:flex;gap:8px;margin-top:8px"><a class="s" style="flex:1;text-decoration:none;padding:10px;border:1px solid var(--pri);border-radius:10px;color:var(--pri)" href="tel:+91'+n+'">📞 Call '+n+'</a><a class="s" style="flex:1;text-decoration:none;padding:10px;border:1px solid var(--ok);border-radius:10px;color:var(--ok)" target="_blank" rel="noopener" href="https://wa.me/91'+n+'">💬 WhatsApp</a></div>'}
+function render(){stopCam();shell();helpBox();var a=$('#app');M.map=null;
+ if(!S.user)return authView(a);
+ S.live=null;if(S.user.role==='customer'){if(S.tab==='bk')return bookingsView(a);return findView(a)}
+ if(S.tab==='bk')return bookingsView(a);if(S.tab==='scan')return scanView(a);if(S.tab==='lots')return ownerLots(a);return ownerDash(a)}
+
+function authView(a){
+ a.innerHTML='<div class="card"><h2 style="margin:0 0 4px">Smart Parking Finder</h2><div class="mut">Find free parking near where you are going.</div>'+
+ '<div class="seg" style="margin:12px 0"><button data-r="customer" class="'+(S.role==='customer'?'on':'')+'">🚗 Customer</button><button data-r="owner" class="'+(S.role==='owner'?'on':'')+'">🏢 Parking owner</button></div>'+
+ (S.reg?'<input id="n" placeholder="Full name">':'')+'<input id="m" inputmode="numeric" maxlength="10" placeholder="Mobile number (10 digits)"><input id="p" type="password" placeholder="Password (6+ characters)">'+
+ '<button class="p" id="go">'+(S.reg?'Create account':'Sign in')+'</button><p class="mut" style="text-align:center"><a href="#" id="sw">'+(S.reg?'Already have an account? Sign in':'New here? Create account')+'</a></p></div>';
+ Array.prototype.forEach.call(a.querySelectorAll('[data-r]'),function(b){b.onclick=function(){S.role=b.dataset.r;authView(a)}});
+ $('#sw').onclick=function(e){e.preventDefault();S.reg=!S.reg;authView(a)};
+ $('#go').onclick=function(){var b={mobile:$('#m').value,password:$('#p').value,role:S.role};if(S.reg)b.name=$('#n').value;
+  api(S.reg?'register':'login','POST',b).then(function(){return api('me')}).then(function(r){S.user=r.user;S.tab=S.user.role==='owner'?'dash':'find';render()}).catch(function(e){toast(e.message)})}}
+
+/* ---------- Customer: find ---------- */
+function findView(a){
+ a.innerHTML='<div class="card"><div class="mut">FROM</div><div style="display:flex;gap:6px"><input id="fr" placeholder="Current location" value="'+esc(S.from?S.from.name:'')+'"><button class="s" id="gp">📍</button></div><div id="fs"></div>'+
+ '<div class="mut" style="margin-top:6px">TO (where you are going)</div><input id="to" placeholder="Search a place in India, e.g. Connaught Place" value="'+esc(S.to?S.to.name:'')+'"><div id="ts"></div>'+
+ '<div class="mut" style="margin-top:6px">I will reach within</div><div class="seg" id="hs">'+[15,30,60].map(function(h){return '<button data-h="'+h+'" class="'+(S.hold===h?'on':'')+'">'+(h===60?'1 hr':h+' min')+'</button>'}).join('')+'</div></div>'+
+ '<div id="map"></div><div class="legend"><span><i style="background:#168a45"></i>Available</span><span><i style="background:#d98200"></i>Limited (≤3)</span><span><i style="background:#c62828"></i>Full</span><span><i style="background:#222"></i>You (A)</span></div><div id="res"></div>';
+ M.init($('#map'));S.live=function(){update(true)};
+ $('#gp').onclick=function(){gps().then(function(p){S.from={name:'Current location',lat:p.lat,lng:p.lng};$('#fr').value='Current location';update()}).catch(function(e){toast(e.message)})};
+ search($('#fr'),$('#fs'),function(p){S.from=p});search($('#to'),$('#ts'),function(p){S.to=p});
+ Array.prototype.forEach.call(a.querySelectorAll('[data-h]'),function(b){b.onclick=function(){S.hold=+b.dataset.h;findView(a)}});
+ if(!S.from)gps().then(function(p){S.from={name:'Current location',lat:p.lat,lng:p.lng};$('#fr').value='Current location';update()}).catch(function(){});
+ update()}
+function search(inp,box,set){var t;inp.oninput=function(){clearTimeout(t);var q=inp.value.trim();if(q.length<3){box.innerHTML='';return}
+  t=setTimeout(function(){M.geocode(q).then(function(r){box.innerHTML=r.length?'<div class="sug">'+r.map(function(x,i){return '<div data-i="'+i+'">'+esc(x.name)+'</div>'}).join('')+'</div>':'<div class="mut">No place found</div>';
+   Array.prototype.forEach.call(box.querySelectorAll('[data-i]'),function(d){d.onclick=function(){var x=r[+d.dataset.i];set(x);inp.value=x.name;box.innerHTML='';update()}})}).catch(function(e){toast(e.message)})},500)}}
+function update(quiet){
+ var pt=S.to||S.from;if(!pt){M.view(20.59,78.96,5);return}
+ var q=(S.to?'?lat='+S.to.lat+'&lng='+S.to.lng:'?lat='+S.from.lat+'&lng='+S.from.lng)+'&eta='+S.hold;
+ api('lots'+q).then(function(r){S.lots=r.lots;M.clear();
+  if(S.from)M.pin(S.from.lat,S.from.lng,'#222','A');
+  if(S.to){M.pin(S.to.lat,S.to.lng,'#c62828','B');M.circle(S.to.lat,S.to.lng,1000);if(!quiet)M.fit()}else if(!quiet)M.view(S.from.lat,S.from.lng,14);
+  var near=S.to?S.lots.filter(function(l){return l.dist<=1000}):S.lots;
+  r.lots.forEach(function(l){M.pin(l.lat,l.lng,l.free===0?'#c62828':(l.free<=3?'#d98200':'#168a45'),'P',function(){open(l)})});
+  var avail=near.filter(function(l){return l.free>0}),sp=avail.reduce(function(s,l){return s+l.free},0),v='';
+  if(S.to){v=avail.length?'<div class="verdict v-ok">✅ Parking available within 1 km of '+esc(S.to.name.split(',')[0])+': '+sp+' free slot'+(sp>1?'s':'')+' in '+avail.length+' lot'+(avail.length>1?'s':'')+'.</div>':
+   '<div class="verdict v-no">❌ '+(near.length?'All lots within 1 km are full.':'No registered parking within 1 km of this place.')+' Nearest registered lot is '+(S.lots[0]?km(S.lots[0].dist)+' away.':'not available yet.')+'</div>'}
+  var cand=(S.to?near:S.lots).slice(),ok=cand.filter(function(l){return l.free>0}),best=null;
+  if(ok.length){var md=Math.max.apply(null,ok.map(function(l){return l.dist||1}))||1,mp=Math.max.apply(null,ok.map(function(l){return l.rate}))||1;
+   ok.forEach(function(l){l.score=.5*((l.dist||0)/md)+.3*(l.rate/mp)+.2*(1-Math.min(l.pred_free,l.total)/l.total)});
+   ok.sort(function(a,b){return a.score-b.score});best=ok[0];
+   cand=ok.concat(cand.filter(function(l){return l.free===0}))}
+  var list=cand.map(function(l){return lotRow(l,best&&l.id===best.id)}).join('');
+  $('#res').innerHTML=v+(list||'<div class="card mut">No parking lots registered yet. Owners can add lots from their login.</div>');
+  Array.prototype.forEach.call(document.querySelectorAll('[data-lot]'),function(b){b.onclick=function(){open(S.lots.find(function(l){return l.id==b.dataset.lot}))}})}).catch(function(e){toast(e.message)})}
+function lotRow(l,best){var c=l.free===0?'r':(l.free<=3?'y':'g'),col=l.free===0?'#c62828':(l.free<=3?'#d98200':'#168a45'),pct=Math.round(l.free/l.total*100);
+ return '<div class="card lot'+(best?' best':'')+'" data-lot="'+l.id+'"><div style="flex:1;min-width:0">'+(best?'<span class="tag g" style="color:#fff">⭐ Best match</span>':'')+(l.ev?'<span class="tag" style="background:#e3f2fd;color:#0b57d0">⚡ EV charging</span>':'')+'<div><b>'+esc(l.name)+'</b></div><div class="mut">'+esc(l.area)+' · '+(l.dist!=null?km(l.dist)+(S.to?' from destination':' away')+' · ':'')+rs(l.rate)+'/hr</div>'+
+ (eta(l)?'<div class="mut">'+eta(l)+'</div>':'')+'<div class="bar"><i style="width:'+pct+'%;background:'+col+'"></i></div>'+
+ '<div class="mut" style="margin-top:3px">🔮 Predicted when you arrive: ~'+l.pred_free+' free ('+l.pred_busy+'% busy)</div></div><span class="badge '+c+'">'+(l.free?l.free+' free':'FULL')+'</span></div>'}
+function open(l){S.sel=l;S.live=null;var a=$('#app');
+ a.innerHTML='<div class="card"><button class="s" id="bk0">← Back</button><h3 style="margin:10px 0 2px">'+esc(l.name)+'</h3><div class="mut">'+esc(l.area)+' · '+l.free+' of '+l.total+' free · '+rs(l.rate)+'/hr</div>'+
+ '<div class="mut" style="margin-top:10px">VEHICLE</div><div class="seg" id="vs">'+[['bike','🏍 Bike ×0.5'],['car','🚗 Car ×1'],['suv','🚙 SUV ×1.5']].map(function(v){return '<button data-v="'+v[0]+'" class="'+(S.veh===v[0]?'on':'')+'">'+v[1]+'</button>'}).join('')+'</div>'+
+ '<input id="vn" placeholder="Vehicle number (e.g. MH12AB1234)"><div class="mut">PARKING DURATION (hours)</div><select id="hr">'+[0.5,1,2,3,4,6,8,12,24].map(function(h){return '<option '+(h===S.hours?'selected':'')+'>'+h+'</option>'}).join('')+'</select>'+
+ '<div class="mut">Slot held for you for '+S.hold+' min after booking.</div><h2 id="amt" style="margin:8px 0"></h2><button class="p" id="bkn" '+(l.free?'':'disabled')+'>'+(l.free?'Book & pay with UPI':'Lot is full')+'</button>'+
+ '<a class="s" style="display:block;text-align:center;margin-top:8px;padding:9px;border:1px solid var(--pri);border-radius:10px;color:var(--pri);text-decoration:none" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination='+l.lat+','+l.lng+'">🧭 Navigate in Google Maps</a></div>';
+ function amt(){S.hours=+$('#hr').value;$('#amt').textContent='Fee: '+rs(l.rate*({bike:.5,car:1,suv:1.5})[S.veh]*S.hours)}amt();
+ $('#hr').onchange=amt;$('#bk0').onclick=render;
+ Array.prototype.forEach.call(a.querySelectorAll('[data-v]'),function(b){b.onclick=function(){S.veh=b.dataset.v;Array.prototype.forEach.call(a.querySelectorAll('[data-v]'),function(x){x.classList.toggle('on',x===b)});amt()}});
+ $('#bkn').onclick=function(){api('book','POST',{lot_id:l.id,vehicle:S.veh,vehicle_no:$('#vn').value,hours:S.hours,hold_min:S.hold}).then(function(r){payView(r.id)}).catch(function(e){toast(e.message)})}}
+function youpiView(id){var a=$('#app');S.live=null;
+ api('bookings').then(function(r){var b=r.bookings.find(function(z){return z.id===id});
+  a.innerHTML='<div class="card qr"><h3 style="margin:0">Pay '+rs(b.amount)+'</h3><div class="mut">Booking '+esc(b.code)+' · pay within <b id="cd"></b></div>'+
+  '<div class="mut" style="margin:10px 0">Secure UPI checkout (YouPI). You will verify your mobile, scan the QR or open GPay / PhonePe / Paytm. Your booking is confirmed automatically after payment.</div>'+
+  '<button class="p" id="yp">Pay '+rs(b.amount)+' with UPI</button><div id="ys" class="mut" style="margin-top:10px"></div></div>';
+  function tick(){var t=Math.max(0,Math.floor(b.hold_until-Date.now()/1000));if($('#cd'))$('#cd').textContent=Math.floor(t/60)+':'+('0'+t%60).slice(-2)}tick();
+  var iv=setInterval(function(){if(!$('#cd'))return clearInterval(iv);tick()},1000),pv=null;
+  function poll(){api('youpi/status/'+id).then(function(x){if(x.status==='paid'||x.status==='in'||x.status==='done'){clearInterval(pv);toast('Payment received. Booking confirmed!');S.tab='bk';render()}else if(x.status==='expired'||x.status==='noshow'){clearInterval(pv);$('#ys')&&($('#ys').textContent='Booking expired.')}}).catch(function(){})}
+  $('#yp').onclick=function(){var w=window.open('about:blank','_blank');$('#yp').disabled=true;
+   api('youpi/start/'+id,'POST').then(function(x){if(w)w.location=x.checkout_url;else location.href=x.checkout_url;$('#ys').innerHTML='Waiting for payment… <a href="'+esc(x.checkout_url)+'" target="_blank" rel="noopener">Reopen checkout</a>';$('#yp').disabled=false;clearInterval(pv);pv=setInterval(poll,3000)}).catch(function(e){if(w)w.close();$('#yp').disabled=false;toast(e.message)})}}).catch(function(e){toast(e.message)})}
+function payView(id){var a=$('#app');S.live=null;if(S.cfg&&S.cfg.youpi)return youpiView(id);
+ Promise.all([api('upi/'+id),api('bookings')]).then(function(x){var u=x[0],b=x[1].bookings.find(function(z){return z.id===id});
+  a.innerHTML='<div class="card qr"><h3 style="margin:0">Pay '+rs(u.amount)+'</h3><div class="mut">Booking '+u.code+' · pay within <b id="cd"></b></div><div id="qrbox" style="margin:10px 0"></div>'+
+  '<div class="mut">Scan with any UPI app (GPay, PhonePe, Paytm) or tap below<br>UPI ID: <b>'+esc(u.upi_id)+'</b></div>'+
+  '<a href="'+esc(u.link)+'" class="p" style="display:block;background:var(--pri);color:#fff;text-decoration:none;border-radius:10px;padding:12px;margin:10px 0;font-weight:600">Open UPI app & pay '+rs(u.amount)+'</a>'+
+  '<input id="utr" inputmode="numeric" maxlength="12" placeholder="12-digit UPI reference (UTR) after paying"><button class="p" id="pd">I have paid</button></div>';
+  try{var q=qrcode(0,'M');q.addData(u.link);q.make();$('#qrbox').innerHTML=q.createImgTag(5,8)}catch(e){$('#qrbox').innerHTML='<div class="mut">QR could not load - use the button below.</div>'}
+  function tick(){var s=Math.max(0,Math.floor(b.hold_until-Date.now()/1000));if($('#cd'))$('#cd').textContent=Math.floor(s/60)+':'+('0'+s%60).slice(-2)}tick();var iv=setInterval(function(){if(!$('#cd'))return clearInterval(iv);tick()},1000);
+  $('#pd').onclick=function(){api('pay/'+id,'POST',{utr:$('#utr').value}).then(function(){toast('Payment submitted. Owner will confirm.');S.tab='bk';render()}).catch(function(e){toast(e.message)})}}).catch(function(e){toast(e.message)})}
+
+function cdTick(){Array.prototype.forEach.call(document.querySelectorAll('[data-cd]'),function(e){var t=Math.max(0,Math.floor(+e.dataset.cd-Date.now()/1000));e.textContent=Math.floor(t/60)+':'+('0'+t%60).slice(-2)})}
+setInterval(cdTick,1000);setInterval(function(){if(S.live&&S.user)S.live()},6000);
+/* ---------- Bookings (both roles) ---------- */
+var LBL={noshow:['No-show - slot released','r'],held:['Waiting for payment','y'],paid_unverified:['Paid - owner checking','y'],paid:['Confirmed','g'],in:['Parked','g'],done:['Completed','g'],expired:['Expired','r']};
+function bookingsView(a){S.live=function(){bookingsView(a)};Promise.all([api('bookings'),S.user.role==='customer'?api('stats'):Promise.resolve(null)]).then(function(x){var r=x[0],st=x[1],o=S.user.role==='owner';
+ a.innerHTML=(st?'<div class="tiles"><div class="tile"><span class="mut">Total spent</span><b>'+rs(st.spent)+'</b></div><div class="tile"><span class="mut">Total bookings</span><b>'+st.trips+'</b></div></div>'+(st.favourites.length?'<div class="card"><b>⭐ Favourite parking</b>'+st.favourites.map(function(f){return '<div class="mut">'+esc(f.name)+' · '+esc(f.area)+' · '+f.trips+' trip'+(f.trips>1?'s':'')+'</div>'}).join('')+'</div>':''):'')+(r.bookings.length?r.bookings.map(function(b){var l=LBL[b.status]||[b.status,'y'];
+  return '<div class="card"><div class="lot"><div><b>'+esc(b.lot)+'</b><div class="mut">'+(o?esc(b.customer)+' · '+esc(b.mobile)+' · ':'')+esc(b.vehicle.toUpperCase())+' '+esc(b.vehicle_no)+' · '+b.hours+' h · '+rs(b.amount)+'</div></div><span class="badge '+l[1]+'">'+l[0]+'</span></div>'+
+  (b.status==='held'&&!o?'<div class="qr" style="margin-top:8px"><div class="mut">Pay within <b data-cd="'+b.hold_until+'"></b></div><button class="s pay" data-id="'+b.id+'">Pay now</button></div>':'')+
+  (!o&&(b.status==='paid'||b.status==='paid_unverified')?'<div class="mut" style="text-align:center;margin-top:6px">Reach within <b data-cd="'+b.hold_until+'"></b> or the slot is released</div>':'')+(!o&&(b.status==='paid'||b.status==='paid_unverified'||b.status==='in')?'<div class="qr" id="t'+b.id+'" style="margin-top:8px"></div><div class="qr"><b>Ticket '+esc(b.code)+'</b><div class="mut">Show at gate. UTR '+esc(b.utr||'-')+'</div></div>':'')+
+  (o&&b.status==='paid_unverified'?'<div class="mut" style="margin-top:6px">UTR: <b>'+esc(b.utr)+'</b> - check in your UPI app, then confirm.</div><button class="p vf" data-c="'+esc(b.code)+'">✔ Payment received - confirm</button>':'')+
+  (o?'<div class="mut" style="margin-top:4px">Code: '+esc(b.code)+'</div>':'')+'</div>'}).join(''):'<div class="card mut">No bookings yet.</div>');
+ cdTick();r.bookings.forEach(function(b){var e=$('#t'+b.id);if(e)try{var q=qrcode(0,'M');q.addData(b.code);q.make();e.innerHTML=q.createImgTag(5,6)}catch(x){}});
+ Array.prototype.forEach.call(a.querySelectorAll('.pay'),function(b){b.onclick=function(){payView(+b.dataset.id)}});
+ Array.prototype.forEach.call(a.querySelectorAll('.vf'),function(b){b.onclick=function(){api('owner/verify/'+b.dataset.c,'POST').then(function(){toast('Payment confirmed');bookingsView(a)}).catch(function(e){toast(e.message)})}})}).catch(function(e){toast(e.message)})}
+
+/* ---------- Owner ---------- */
+function ownerLots(a){api('lots').then(function(r){var mine=r.lots.filter(function(l){return l.owner_id===S.user.id});
+ a.innerHTML='<div class="card"><h3 style="margin:0 0 6px">Add your parking</h3><input id="ln" placeholder="Parking name"><input id="la" placeholder="Area / address"><div style="display:flex;gap:6px"><input id="lr" inputmode="decimal" placeholder="Rate ₹/hr"><input id="lt" inputmode="numeric" placeholder="Total slots"></div>'+
+  '<label class="mut" style="display:block;margin:6px 0"><input type="checkbox" id="lev" style="width:auto"> ⚡ EV charging available</label><div class="mut">Search or tap the map to set exact location'+'</div><input id="ls" placeholder="Search address on map"><div id="lss"></div><div style="display:flex;gap:6px"><button class="s" id="lg">📍 Use my location</button></div><div id="map"></div><div class="mut" id="lp">No location selected</div><button class="p" id="lsv">Save parking</button></div>'+
+  '<h3>Your parking lots ('+mine.length+')</h3>'+(mine.map(function(l){return '<div class="card lot"><div><b>'+esc(l.name)+(l.ev?' ⚡':'')+'</b><div class="mut">'+esc(l.area)+' · '+rs(l.rate)+'/hr · '+l.free+'/'+l.total+' free</div></div><button class="d" data-d="'+l.id+'">Remove</button></div>'}).join('')||'<div class="mut">None yet.</div>');
+ M.init($('#map'));M.setSat(true);S.pin=null;
+ mine.forEach(function(l){M.pin(l.lat,l.lng,'#168a45','P')});if(mine[0])M.view(mine[0].lat,mine[0].lng,14);
+ function setPin(lat,lng){if(!inIndia(lat,lng)){toast('Please pick a place inside India');return}S.pin={lat:lat,lng:lng};M.clear();mine.forEach(function(l){M.pin(l.lat,l.lng,'#168a45','P')});M.pin(lat,lng,'#c62828','★');M.view(lat,lng,17);$('#lp').textContent='Selected: '+lat.toFixed(5)+', '+lng.toFixed(5)}
+ M.clickCb=function(la,ln){if(!inIndia(la,ln)){toast('Please pick a place inside India');return}setPin(la,ln)};
+ $('#lg').onclick=function(){gps().then(function(p){setPin(p.lat,p.lng)}).catch(function(e){toast(e.message)})};
+ search($('#ls'),$('#lss'),function(p){setPin(p.lat,p.lng)});
+ $('#lsv').onclick=function(){if(!S.pin)return toast('Select the parking location on the map');
+  api('lots','POST',{name:$('#ln').value,area:$('#la').value,rate:$('#lr').value,total:$('#lt').value,ev:$('#lev').checked,lat:S.pin.lat,lng:S.pin.lng}).then(function(){toast('Parking added - customers can see it now');ownerLots(a)}).catch(function(e){toast(e.message)})};
+ Array.prototype.forEach.call(a.querySelectorAll('[data-d]'),function(b){b.onclick=function(){if(confirm('Remove this parking?'))api('lots/'+b.dataset.d,'DELETE').then(function(){ownerLots(a)})}})}).catch(function(e){toast(e.message)})}
+function bars(vals,labels,color,fmt){var mx=Math.max.apply(null,vals.concat([1])),w=300/vals.length,o='<svg viewBox="0 0 300 120" style="width:100%">';
+ vals.forEach(function(v,i){var h=v/mx*80;o+='<rect x="'+(i*w+1)+'" y="'+(90-h)+'" width="'+(w-2)+'" height="'+h+'" rx="2" fill="'+color+'"/>'+(v?'<text x="'+(i*w+w/2)+'" y="'+(86-h)+'" font-size="7" text-anchor="middle" fill="#667">'+(fmt?fmt(v):v)+'</text>':'')+(labels[i]!=null&&labels[i]!==''?'<text x="'+(i*w+w/2)+'" y="104" font-size="7" text-anchor="middle" fill="#667">'+labels[i]+'</text>':'')});
+ return o+'</svg>'}
+function ownerDash(a){S.live=function(){ownerDash(a)};api('stats').then(function(t){
+ var peak=t.by_hour.indexOf(Math.max.apply(null,t.by_hour));
+ a.innerHTML='<div class="tiles"><div class="tile"><span class="mut">Total slots</span><b>'+t.total+'</b></div><div class="tile"><span class="mut">Available now</span><b style="color:var(--ok)">'+t.free+'</b></div><div class="tile"><span class="mut">Occupied / held</span><b style="color:var(--bad)">'+t.occupied+'</b></div><div class="tile"><span class="mut">Bookings today</span><b>'+t.today+'</b></div><div class="tile"><span class="mut">Revenue (paid)</span><b>'+rs(t.revenue)+'</b></div><div class="tile"><span class="mut">Payments to verify</span><b style="color:var(--warn)">'+t.pending+'</b></div></div>'+
+ (t.pending?'<button class="p" id="gv">Verify '+t.pending+' pending payment'+(t.pending>1?'s':'')+'</button>':'')+
+ '<div class="card"><b>Bookings by hour of day</b>'+bars(t.by_hour,t.by_hour.map(function(v,i){return i%3===0?i+'h':''}),'#0b57d0')+'<div class="mut">'+(Math.max.apply(null,t.by_hour)?'Peak hour: '+peak+':00 – '+(peak+1)+':00':'No bookings yet')+'</div></div>'+
+ '<div class="card"><b>Revenue - last 7 days (₹)</b>'+bars(t.by_day.map(function(d){return d.revenue}),t.by_day.map(function(d){return d.label.slice(0,6)}),'#168a45',function(v){return Math.round(v)})+'</div>';
+ if($('#gv'))$('#gv').onclick=function(){S.tab='bk';render()}}).catch(function(e){toast(e.message)})}
+var cam={st:null,t:null};
+function stopCam(){if(cam.t){clearInterval(cam.t);cam.t=null}if(cam.st){cam.st.getTracks().forEach(function(t){t.stop()});cam.st=null}var b=$('#cam-box');if(b){b.hidden=true;b.innerHTML=''}}
+function doScan(code){return api('owner/scan/'+encodeURIComponent(code),'POST').then(function(r){var b=r.booking;$('#out').innerHTML='<div class="verdict v-ok">'+esc(r.msg)+'<br>'+esc(b.customer)+' · '+esc(b.vehicle_no)+'</div>';$('#cd').value=''}).catch(function(e){$('#out').innerHTML='<div class="verdict v-no">'+esc(e.message)+'</div>'})}
+function gotQR(txt){var m=String(txt).match(/SP[0-9A-F]{6}/i);if(!m)return;stopCam();doScan(m[0].toUpperCase())}
+function startCam(){
+ var box=$('#cam-box');
+ if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){toast('Camera not available. Type the ticket code.');return}
+ box.hidden=false;box.innerHTML='<video id="cam-v" playsinline muted style="width:100%;max-height:300px;border-radius:10px;background:#000;object-fit:cover"></video><button class="s" id="cam-x" style="margin-top:6px">Close camera</button>';
+ $('#cam-x').onclick=stopCam;
+ navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}).then(function(st){
+  cam.st=st;var v=$('#cam-v');if(!v){stopCam();return}v.srcObject=st;v.play();
+  var det=window.BarcodeDetector?new window.BarcodeDetector({formats:['qr_code']}):null,cv=document.createElement('canvas');
+  cam.t=setInterval(function(){
+   if(v.readyState<2)return;
+   if(det){det.detect(v).then(function(r){if(r[0])gotQR(r[0].rawValue)}).catch(function(){})}
+   else if(window.jsQR){cv.width=v.videoWidth;cv.height=v.videoHeight;var x=cv.getContext('2d');x.drawImage(v,0,0);var d=x.getImageData(0,0,cv.width,cv.height),c=window.jsQR(d.data,d.width,d.height);if(c)gotQR(c.data)}
+  },350)}).catch(function(){box.hidden=true;box.innerHTML='';toast('Camera permission not given. Type the ticket code.')})}
+function scanView(a){a.innerHTML='<div class="card"><h3 style="margin:0 0 6px">Gate scanner</h3><button class="p" id="cam-s">📷 Scan QR ticket with camera</button><div id="cam-box" hidden></div><div class="mut" style="margin-top:8px">Or type the ticket code (e.g. SP1A2B3C). First scan = entry, second scan = exit.</div><input id="cd" placeholder="Ticket code" style="text-transform:uppercase"><button class="p" id="sc">Scan</button><div id="out"></div></div>';
+ $('#cam-s').onclick=startCam;
+ $('#sc').onclick=function(){doScan($('#cd').value.trim())}}
+
+/* ---------- Boot ---------- */
+api('config').then(function(c){S.cfg=c;return c.gmaps_key?loadScript('https://maps.googleapis.com/maps/api/js?key='+encodeURIComponent(c.gmaps_key)).then(function(){M.g=true}).catch(function(){toast('Google Maps failed to load - using OpenStreetMap')}):0}).then(function(){return api('me')}).then(function(r){S.user=r.user;S.tab=S.user?(S.user.role==='owner'?'dash':'find'):'find';if(S.user&&/[?&]paid=/.test(location.search)){S.tab='bk';history.replaceState(null,'',location.pathname)}render()});
+})();
+</script></body></html>
